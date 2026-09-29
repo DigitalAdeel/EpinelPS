@@ -1,0 +1,132 @@
+name: Auto Release Latest Main Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build Windows Release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Restore packages
+        run: dotnet restore
+
+      - name: Publish Server Selector GUI
+        run: dotnet publish ServerSelector.Desktop
+
+      - name: Publish Server
+        run: dotnet publish EpinelPS
+
+      - name: Copy to output
+        run: |
+          mkdir "${{ github.workspace }}\out"
+          xcopy /s /e "${{ github.workspace }}\ServerSelector.Desktop\bin\Release\net10.0\win-x64\publish\*" "${{ github.workspace }}\out\"
+          xcopy /s /e "${{ github.workspace }}\EpinelPS\bin\Release\net10.0\win-x64\publish\*" "${{ github.workspace }}\out\"
+          copy "${{ github.workspace }}\ServerSelector.Desktop\sodium.dll" "${{ github.workspace }}\out\sodium.dll"
+
+      # Zip output folder with the custom requested name
+      - name: Compress Build Artifact
+        run: Compress-Archive -Path "${{ github.workspace }}\out\*" -DestinationPath "${{ github.workspace }}\EpinelPS_ServerSelector_WINX64.zip"
+
+      - name: Upload Windows Zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: win64-zip
+          path: ${{ github.workspace }}/EpinelPS_ServerSelector_WINX64.zip
+
+  build-linux:
+    name: Build Linux Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore packages
+        run: dotnet restore
+
+      - name: Publish Server
+        run: dotnet publish EpinelPS
+
+      - name: Copy to output
+        run: |
+          mkdir -p "${{ github.workspace }}/out"
+          cp -R ${{ github.workspace }}/EpinelPS/bin/Release/net10.0/linux-x64/publish/* "${{ github.workspace }}/out/"
+
+      # Zip output folder with the custom requested name
+      - name: Compress Build Artifact
+        run: cd "${{ github.workspace }}/out" && zip -r "${{ github.workspace }}/EpinelPS_ServerSelector_LINUX64.zip" .
+
+      - name: Upload Linux Zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux64-zip
+          path: ${{ github.workspace }}/EpinelPS_ServerSelector_LINUX64.zip
+
+  publish-release:
+    name: Create GitHub Release
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout main for commit SHA
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Get Short Commit SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Download Windows Zip Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: win64-zip
+          path: release-files
+
+      - name: Download Linux Zip Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux64-zip
+          path: release-files
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.sha_short }}
+          name: Release ${{ env.sha_short }}
+          body: |
+            Automated build release for commit `${{ env.sha_short }}`.
+            
+            Commit Details: https://github.com/${{ github.repository }}/commit/${{ github.sha }}
+          draft: false
+          prerelease: false
+          files: release-files/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
