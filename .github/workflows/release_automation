@@ -41,15 +41,15 @@ jobs:
           xcopy /s /e "${{ github.workspace }}\EpinelPS\bin\Release\net10.0\win-x64\publish\*" "${{ github.workspace }}\out\"
           copy "${{ github.workspace }}\ServerSelector.Desktop\sodium.dll" "${{ github.workspace }}\out\sodium.dll"
 
-      # Zip output folder with the custom requested name
+      # Windows zip: Server + ServerSelector
       - name: Compress Build Artifact
-        run: Compress-Archive -Path "${{ github.workspace }}\out\*" -DestinationPath "${{ github.workspace }}\EpinelPS_ServerSelector_WINX64.zip"
+        run: Compress-Archive -Path "${{ github.workspace }}\out\*" -DestinationPath "${{ github.workspace }}\EpinelPS_ServerSelector_win-x64.zip"
 
       - name: Upload Windows Zip
         uses: actions/upload-artifact@v4
         with:
           name: win64-zip
-          path: ${{ github.workspace }}/EpinelPS_ServerSelector_WINX64.zip
+          path: ${{ github.workspace }}/EpinelPS_ServerSelector_win-x64.zip
 
   build-linux:
     name: Build Linux Release
@@ -77,15 +77,15 @@ jobs:
           mkdir -p "${{ github.workspace }}/out"
           cp -R ${{ github.workspace }}/EpinelPS/bin/Release/net10.0/linux-x64/publish/* "${{ github.workspace }}/out/"
 
-      # Zip output folder with the custom requested name
+      # Linux zip: EpinelPS server only
       - name: Compress Build Artifact
-        run: cd "${{ github.workspace }}/out" && zip -r "${{ github.workspace }}/EpinelPS_ServerSelector_LINUX64.zip" .
+        run: cd "${{ github.workspace }}/out" && zip -r "${{ github.workspace }}/EpinelPS_linux-x64.zip" .
 
       - name: Upload Linux Zip
         uses: actions/upload-artifact@v4
         with:
           name: linux64-zip
-          path: ${{ github.workspace }}/EpinelPS_ServerSelector_LINUX64.zip
+          path: ${{ github.workspace }}/EpinelPS_linux-x64.zip
 
   publish-release:
     name: Create GitHub Release
