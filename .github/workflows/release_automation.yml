@@ -1,10 +1,6 @@
 name: Sync, Build, and Release
 
 on:
-  workflow_run:
-    workflows: ["Build and publish server"]
-    types:
-      - completed
   schedule:
     - cron: '0 0 * * *'
   push:
@@ -13,134 +9,116 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Job 1: Keep fork synced with upstream
-  sync-upstream:
-    name: Sync Fork with Upstream
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+  # Job 1: Build directly from Upstream Repository's Latest Commit
+  build-upstream:
+    name: Build Upstream Latest Commit
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      upstream_sha: ${{ steps.upstream_info.outputs.sha_short }}
+      upstream_sha_full: ${{ steps.upstream_info.outputs.sha_full }}
+      upstream_repo: ${{ steps.upstream_info.outputs.repo }}
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: main
-
-      - name: Run Upstream Sync
+      - name: Resolve Upstream Repository and Latest SHA
+        id: upstream_info
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          gh repo sync ${{ github.repository }} -b main
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Dynamically fetch parent repo name via API to avoid linter warnings
+          UPSTREAM_REPO=$(gh api "repos/${{ github.repository }}" --jq '.parent.full_name // "${{ github.repository }}"')
 
-  # Job 2: Check for existing builds, prevent duplicates, handle exact artifact folders, and publish
-  package-and-release:
-    name: Package Artifacts & Release
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: read
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Determine Target Commit SHA
-        id: target
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            FULL_SHA="${{ github.event.workflow_run.head_sha }}"
-            RUN_ID="${{ github.event.workflow_run.id }}"
-          else
-            FULL_SHA="$(git rev-parse HEAD)"
-            RUN_ID=$(gh api "repos/${{ github.repository }}/actions/workflows/Build\%20and\%20publish\%20server/runs?status=success&head_sha=${FULL_SHA}" --jq '.workflow_runs[0].id')
-          fi
-
+          # Get latest commit SHA directly from the upstream main branch
+          FULL_SHA=$(gh api "repos/${UPSTREAM_REPO}/commits/main" --jq '.sha')
           SHORT_SHA=$(echo "${FULL_SHA}" | cut -c1-7)
 
+          echo "repo=${UPSTREAM_REPO}" >> $GITHUB_OUTPUT
           echo "sha_full=${FULL_SHA}" >> $GITHUB_OUTPUT
           echo "sha_short=${SHORT_SHA}" >> $GITHUB_OUTPUT
-          echo "run_id=${RUN_ID}" >> $GITHUB_OUTPUT
 
-          echo "Target SHA: ${SHORT_SHA}"
-          echo "Associated Workflow Run ID: ${RUN_ID}"
+          echo "Targeting Upstream Repo: ${UPSTREAM_REPO}"
+          echo "Targeting Upstream Commit SHA: ${SHORT_SHA}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Prevent duplicate releases
-      - name: Check Existing Release
+      - name: Checkout Upstream Code at Target SHA
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.upstream_info.outputs.repo }}
+          ref: ${{ steps.upstream_info.outputs.sha_full }}
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore Dependencies
+        run: dotnet restore
+
+      - name: Build Windows Executable
+        run: |
+          dotnet publish -c Release -r win-x64 --self-contained true -o ./build-output/win-x64
+
+      - name: Build Linux Executable
+        run: |
+          dotnet publish -c Release -r linux-x64 --self-contained true -o ./build-output/linux-x64
+
+      - name: Package Binaries into Zips
+        run: |
+          mkdir -p packaged-artifacts
+          cd build-output/win-x64 && zip -r "../../packaged-artifacts/EpinelPS_ServerSelector_WINX64.zip" . && cd ../..
+          cd build-output/linux-x64 && zip -r "../../packaged-artifacts/EpinelPS_LINUX64.zip" . && cd ../..
+
+      - name: Upload Packaged Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-release-assets
+          path: packaged-artifacts/*
+          retention-days: 1
+
+  # Job 2: Check for existing release and publish on Fork using Upstream Tag
+  package-and-release:
+    name: Create GitHub Release
+    needs: build-upstream
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Check Existing Release on Fork
         id: check_release
         run: |
-          if gh release view "${{ steps.target.outputs.sha_short }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "Release for commit ${{ steps.target.outputs.sha_short }} already exists. Exiting."
+          TARGET_SHA="${{ needs.build-upstream.outputs.upstream_sha }}"
+          if gh release view "${TARGET_SHA}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release for upstream commit ${TARGET_SHA} already exists. Skipping."
             echo "exists=true" >> $GITHUB_OUTPUT
           else
-            echo "No existing release found for ${{ steps.target.outputs.sha_short }}. Proceeding."
+            echo "No existing release found for upstream commit ${TARGET_SHA}. Proceeding."
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify Build Run Available
-        if: ${{ steps.check_release.outputs.exists == 'false' }}
-        run: |
-          if [ -z "${{ steps.target.outputs.run_id }}" ] \vert{}\vert{} [ "${{ steps.target.outputs.run_id }}" = "null" ]; then
-            echo "Error: No completed build workflow found for commit ${{ steps.target.outputs.sha_short }}."
-            echo "Please wait for the 'Build and publish server' workflow to complete first."
-            exit 1
-          fi
-
-      - name: Download Artifacts
+      - name: Download Build Artifacts
         if: ${{ steps.check_release.outputs.exists == 'false' }}
         uses: actions/download-artifact@v4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ steps.target.outputs.run_id }}
-          path: raw-artifacts
+          name: compiled-release-assets
+          path: release-files
 
-      # Process exact artifact folder names: "Server and Server selector" & "EpinelPS_linux_x64"
-      - name: Rename Zip Artifacts
-        if: ${{ steps.check_release.outputs.exists == 'false' }}
-        run: |
-          mkdir -p release-files
-
-          # 1. Windows Artifact
-          WIN_DIR="raw-artifacts/Server and Server selector"
-          WIN_ZIP=$(find "$WIN_DIR" -type f -name "*.zip" 2>/dev/null | head -n 1)
-          
-          if [ -n "$WIN_ZIP" ]; then
-            cp "$WIN_ZIP" release-files/EpinelPS_ServerSelector_WINX64.zip
-          elif [ -d "$WIN_DIR" ]; then
-            cd "$WIN_DIR" && zip -r "../../release-files/EpinelPS_ServerSelector_WINX64.zip" . && cd ../..
-          fi
-
-          # 2. Linux Artifact
-          LINUX_DIR="raw-artifacts/EpinelPS_linux_x64"
-          LINUX_ZIP=$(find "$LINUX_DIR" -type f -name "*.zip" 2>/dev/null | head -n 1)
-
-          if [ -n "$LINUX_ZIP" ]; then
-            cp "$LINUX_ZIP" release-files/EpinelPS_LINUX64.zip
-          elif [ -d "$LINUX_DIR" ]; then
-            cd "$LINUX_DIR" && zip -r "../../release-files/EpinelPS_LINUX64.zip" . && cd ../..
-          fi
-
-      - name: Create GitHub Release
+      - name: Create GitHub Release on Fork
         if: ${{ steps.check_release.outputs.exists == 'false' }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.target.outputs.sha_short }}
-          name: Release ${{ steps.target.outputs.sha_short }}
+          tag_name: ${{ needs.build-upstream.outputs.upstream_sha }}
+          name: Release ${{ needs.build-upstream.outputs.upstream_sha }}
           body: |
-            Automated build release for commit `${{ steps.target.outputs.sha_short }}`.
+            Automated release compiled directly from upstream origin commit `${{ needs.build-upstream.outputs.upstream_sha }}`.
             
-            Commit Details: https://github.com/${{ github.repository }}/commit/${{ steps.target.outputs.sha_full }}
+            Upstream Commit: https://github.com/${{ needs.build-upstream.outputs.upstream_repo }}/commit/${{ needs.build-upstream.outputs.upstream_sha_full }}
           draft: false
           prerelease: false
           files: release-files/*
