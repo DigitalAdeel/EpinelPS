@@ -17,6 +17,7 @@ jobs:
       upstream_sha: ${{ steps.upstream_info.outputs.sha_short }}
       upstream_sha_full: ${{ steps.upstream_info.outputs.sha_full }}
       upstream_repo: ${{ steps.upstream_info.outputs.repo }}
+      upstream_commit_msg: ${{ steps.upstream_info.outputs.commit_msg }}
 
     steps:
       - name: Resolve Upstream Repository and Latest SHA
@@ -29,12 +30,17 @@ jobs:
           FULL_SHA=$(gh api "repos/${UPSTREAM_REPO}/commits/main" --jq '.sha')
           SHORT_SHA=$(echo "${FULL_SHA}" | cut -c1-7)
 
+          # Get the first line of the commit message
+          COMMIT_MSG=$(gh api "repos/${UPSTREAM_REPO}/commits/${FULL_SHA}" --jq '.commit.message' | head -n 1)
+
           echo "repo=${UPSTREAM_REPO}" >> $GITHUB_OUTPUT
           echo "sha_full=${FULL_SHA}" >> $GITHUB_OUTPUT
           echo "sha_short=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "commit_msg=${COMMIT_MSG}" >> $GITHUB_OUTPUT
 
           echo "Targeting Upstream Repo: ${UPSTREAM_REPO}"
           echo "Targeting Upstream Commit SHA: ${SHORT_SHA}"
+          echo "Commit Message: ${COMMIT_MSG}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -114,7 +120,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.build-upstream.outputs.upstream_sha }}
-          name: Release ${{ needs.build-upstream.outputs.upstream_sha }}
+          name: ${{ needs.build-upstream.outputs.upstream_commit_msg }}
           body: |
             Automated release compiled directly from upstream origin commit `${{ needs.build-upstream.outputs.upstream_sha }}`.
             
