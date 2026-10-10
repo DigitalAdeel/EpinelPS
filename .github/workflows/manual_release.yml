@@ -1,0 +1,203 @@
+name: Build, Package, and Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  # Job 1: Build Windows Server Selector GUI (Single-File)
+  build-windows-serverselector:
+    name: Build Windows Server Selector
+    runs-on: windows-latest
+    outputs:
+      sha: ${{ steps.commit_info.outputs.sha }}
+      sha_full: ${{ steps.commit_info.outputs.sha_full }}
+      commit_msg: ${{ steps.commit_info.outputs.commit_msg }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Get Commit Info (Excluding Workflow-Only Commits)
+        id: commit_info
+        shell: bash
+        run: |
+          FULL_SHA=$(git log -n 1 --pretty=format:%H -- . ':!.github/workflows/')
+          SHORT_SHA=$(git log -n 1 --pretty=format:%h -- . ':!.github/workflows/')
+          COMMIT_MSG=$(git log -n 1 --pretty=format:%s -- . ':!.github/workflows/')
+          echo "sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "sha_full=${FULL_SHA}" >> $GITHUB_OUTPUT
+          echo "commit_msg=${COMMIT_MSG}" >> $GITHUB_OUTPUT
+
+      - name: Restore Packages
+        run: dotnet restore ServerSelector.Desktop
+
+      - name: Publish Server Selector GUI
+        run: dotnet publish ServerSelector.Desktop -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish-out
+
+      - name: Package Artifact
+        run: |
+          mkdir packaged-artifacts
+          cd publish-out && zip -r "../../packaged-artifacts/ServerSelector_WINX64.zip" . && cd ..
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ServerSelector_WINX64
+          path: packaged-artifacts/*
+          retention-days: 1
+
+  # Job 2: Build Windows EpinelPS Server (Single-File)
+  build-windows-epinelps:
+    name: Build Windows EpinelPS Server
+    runs-on: windows-latest
+    outputs:
+      sha: ${{ steps.commit_info.outputs.sha }}
+      sha_full: ${{ steps.commit_info.outputs.sha_full }}
+      commit_msg: ${{ steps.commit_info.outputs.commit_msg }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Get Commit Info (Excluding Workflow-Only Commits)
+        id: commit_info
+        shell: bash
+        run: |
+          FULL_SHA=$(git log -n 1 --pretty=format:%H -- . ':!.github/workflows/')
+          SHORT_SHA=$(git log -n 1 --pretty=format:%h -- . ':!.github/workflows/')
+          COMMIT_MSG=$(git log -n 1 --pretty=format:%s -- . ':!.github/workflows/')
+          echo "sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "sha_full=${FULL_SHA}" >> $GITHUB_OUTPUT
+          echo "commit_msg=${COMMIT_MSG}" >> $GITHUB_OUTPUT
+
+      - name: Restore Packages
+        run: dotnet restore EpinelPS
+
+      - name: Publish Server
+        run: dotnet publish EpinelPS -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish-out
+
+      - name: Package Artifact
+        run: |
+          mkdir packaged-artifacts
+          cd publish-out && zip -r "../../packaged-artifacts/EpinelPS_WINX64.zip" . && cd ..
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EpinelPS_WINX64
+          path: packaged-artifacts/*
+          retention-days: 1
+
+  # Job 3: Build Linux EpinelPS Server (Single-File)
+  build-linux-epinelps:
+    name: Build Linux EpinelPS Server
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.commit_info.outputs.sha }}
+      sha_full: ${{ steps.commit_info.outputs.sha_full }}
+      commit_msg: ${{ steps.commit_info.outputs.commit_msg }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Get Commit Info (Excluding Workflow-Only Commits)
+        id: commit_info
+        run: |
+          FULL_SHA=$(git log -n 1 --pretty=format:%H -- . ':!.github/workflows/')
+          SHORT_SHA=$(git log -n 1 --pretty=format:%h -- . ':!.github/workflows/')
+          COMMIT_MSG=$(git log -n 1 --pretty=format:%s -- . ':!.github/workflows/')
+          echo "sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "sha_full=${FULL_SHA}" >> $GITHUB_OUTPUT
+          echo "commit_msg=${COMMIT_MSG}" >> $GITHUB_OUTPUT
+
+      - name: Restore Packages
+        run: dotnet restore EpinelPS
+
+      - name: Publish Server
+        run: dotnet publish EpinelPS -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish-out
+
+      - name: Package Binaries into Zip
+        run: |
+          mkdir -p packaged-artifacts
+          cd publish-out && zip -r "../../packaged-artifacts/EpinelPS_LINUX64.zip" . && cd ../..
+
+      - name: Upload Packaged Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EpinelPS_LINUX64
+          path: packaged-artifacts/*
+          retention-days: 1
+
+  # Job 4: Create GitHub Release on Fork using Latest Source Commit
+  create-release:
+    name: Create GitHub Release
+    needs: [build-windows-serverselector, build-windows-epinelps, build-linux-epinelps]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Check Existing Release on Fork
+        id: check_release
+        run: |
+          TARGET_SHA="${{ needs.build-windows-serverselector.outputs.sha }}"
+          if gh release view "${TARGET_SHA}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release for commit ${TARGET_SHA} already exists. Skipping."
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "No existing release found for commit ${TARGET_SHA}. Proceeding."
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Build Artifacts
+        if: ${{ steps.check_release.outputs.exists == 'false' }}
+        uses: actions/download-artifact@v4
+        with:
+          path: release-files
+
+      - name: Create GitHub Release on Fork
+        if: ${{ steps.check_release.outputs.exists == 'false' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build-windows-serverselector.outputs.sha }}
+          name: ${{ needs.build-windows-serverselector.outputs.commit_msg }}
+          body: |
+            Automated release compiled from latest source commit: **${{ needs.build-windows-serverselector.outputs.commit_msg }}** (`${{ needs.build-windows-serverselector.outputs.sha }}`)
+            
+            Full Commit: https://github.com/${{ github.repository }}/commit/${{ needs.build-windows-serverselector.outputs.sha_full }}
+          draft: false
+          prerelease: false
+          files: release-files/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
