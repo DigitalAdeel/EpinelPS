@@ -43,6 +43,13 @@ jobs:
       - name: Publish Server Selector GUI
         run: dotnet publish ServerSelector.Desktop -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish-out
 
+      - name: Copy sodium.dll
+        shell: pwsh
+        run: |
+          if (Test-Path "ServerSelector.Desktop\sodium.dll") {
+            Copy-Item "ServerSelector.Desktop\sodium.dll" "publish-out\" -Force
+          }
+
       - name: Package Artifact
         shell: pwsh
         run: |
