@@ -1,12 +1,13 @@
 using EpinelPS.Data;
 using EpinelPS.Database;
 using EpinelPS.LobbyServer.Stage;
+using EpinelPS.LobbyServer.Tower;
 using EpinelPS.Models.Admin;
 using Google.Protobuf;
+using Microsoft.Data.Sqlite;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Text.Json;
-using EpinelPS.LobbyServer.Tower;
 
 namespace EpinelPS.Utils;
 
@@ -973,7 +974,53 @@ public class AdminCommands
         }
         return RunCmdResponse.OK;
     }
-    
+
+    public static RunCmdResponse AddLocaleFiles(string path)
+    {
+        Console.WriteLine("Checking provided path for required locale files", LogType.Info);
+        if (!string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
+        {
+            List<string> localeFiles = [];
+            foreach (var file in Directory.GetFiles(path))
+            {
+                string cs = $"Data Source={file};Mode=ReadWrite;";
+                try
+                {
+                    using (var con = new SqliteConnection(cs))
+                    {
+                        con.Open();
+                        using (var cmd = con.CreateCommand())
+                        {
+                            cmd.CommandText = "PRAGMA integrity_check";
+                            string? result = cmd.ExecuteScalar() as string;
+                            //Console.WriteLine(string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase)? $"{file} ok": $"{file} not ok");
+                            cmd.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' AND name LIKE '%Locale_%' AND name NOT LIKE 'sqlite_%' ORDER BY name;";
+                            result = cmd.ExecuteScalar() as string;
+                            if (!string.IsNullOrWhiteSpace(result))
+                            {
+                                if (!Directory.Exists(Path.Combine(AppContext.BaseDirectory, "cache", "local-locale")))
+                                    Directory.CreateDirectory(Path.Combine(AppContext.BaseDirectory, "cache", "local-locale"));
+                                var dir = Path.Combine(AppContext.BaseDirectory, "cache", "local-locale");
+                                var newName = $"{result}.lsc";
+                                File.Copy(file, $"{dir}\\{newName}", true);
+                                Console.WriteLine($"{newName} added successfully!");
+                            }
+                        }
+                    }
+                }
+                catch (SqliteException ex) when (ex.SqliteErrorCode == 26)
+                {
+                    Console.WriteLine($"{file}: not ok");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"{file}: not ok");
+                }
+            }
+        }
+        return RunCmdResponse.OK;
+    }
+
     internal static async Task<RunCmdResponse> UpdateResources()
     {
         Logging.WriteLine("updating static data and resource info...", LogType.Info);
